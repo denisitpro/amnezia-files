@@ -32,9 +32,11 @@ starts there, but was not compared against the patched one over time.
 
 Requires Go (`stable`): `keenetic/build.sh`
 
+Default upstream version is in `version.txt` at the repo root.
+
 Env vars:
 
-- `AWG_VERSION` — module version to fetch (default `v3.1.20260814`)
+- `AWG_VERSION` — module version to fetch (default: contents of `version.txt`)
 - `TARGETS` — subset of `aarch64 mipsel mips` (default: all)
 - `NO_PATCH=1` — skip applying the patch
 
@@ -42,9 +44,10 @@ Output goes to `dist/`.
 
 ## Cutting a release
 
-Actions → Build → Run workflow → set `awg_version`, leave `publish` checked.
-Builds all targets, then creates/updates the `keenetic-<awg_version>` release
-and marks it latest. A plain push or pull request only builds and lints.
+A push to `main` builds and publishes the `keenetic-<version>` release (version
+from `version.txt`) and marks it latest. You can also run Actions → Build →
+Run workflow: leave `awg_version` empty to use `version.txt`, or override it;
+leave `publish` checked. Pull requests only build and lint.
 
 ## Scripts (also published as release assets)
 

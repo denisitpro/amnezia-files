@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       awg_version:
-        description: amneziawg-go module version to build
+        description: amneziawg-go module version to build (empty = version.txt)
         required: false
         type: string
-        default: v3.1.20260814
+        default: ""
       publish:
         description: Create/update the GitHub release with the built assets
         required: false
@@ -23,12 +23,17 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      awg_version: ${{ steps.version.outputs.value }}
+      go_version: ${{ steps.go-version.outputs.value }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
+          # Repo has no go.mod/go.sum; build.sh creates a throwaway module.
+          cache: false
 
       - name: Lint scripts
         run: |
@@ -41,7 +46,23 @@ jobs:
 
       - name: Resolve AWG_VERSION
         id: version
-        run: echo "value=${{ inputs.awg_version || 'v3.1.20260814' }}" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.awg_version }}" ]; then
+            value="${{ inputs.awg_version }}"
+          else
+            value="$(tr -d '[:space:]' < version.txt)"
+          fi
+          if [ -z "$value" ]; then
+            echo "::error::AWG_VERSION is empty (set workflow input or version.txt)" >&2
+            exit 1
+          fi
+          echo "value=${value}" >> "$GITHUB_OUTPUT"
+          echo "Using AWG_VERSION=${value}"
+
+      - name: Record Go version
+        id: go-version
+        run: echo "value=$(go version)" >> "$GITHUB_OUTPUT"
 
       - name: Build amneziawg-go
         env:
@@ -69,41 +90,40 @@ jobs:
 
           ( cd release && sha256sum -- * > SHA256SUMS )
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-assets
           path: release/
 
   publish:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    # PR builds must not publish. Push to main and manual runs (publish=true) do.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-assets
           path: release
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: stable
-
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
-          AWG_VERSION: ${{ inputs.awg_version }}
+          AWG_VERSION: ${{ needs.build.outputs.awg_version }}
+          GO_VERSION: ${{ needs.build.outputs.go_version }}
         run: |
           set -euo pipefail
           tag="keenetic-${AWG_VERSION}"
-          go_version="$(go version)"
           notes="Upstream amneziawg-go: ${AWG_VERSION}
           Patch applied: drops IFF_VNET_HDR from tun/tun_linux.go (see keenetic/tun-no-vnet-hdr.patch)
           Targets: linux/arm64 (aarch64), linux/mipsle (mipsel), linux/mips (mips), CGO_ENABLED=0, GOMIPS=softfloat where applicable
-          Go: ${go_version}
+          Go: ${GO_VERSION}
           Commit: ${GITHUB_SHA}"
 
           if gh release view "$tag" >/dev/null 2>&1; then

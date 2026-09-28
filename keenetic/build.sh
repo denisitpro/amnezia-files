@@ -5,12 +5,11 @@
 #
 # Usage: keenetic/build.sh
 # Env:
-#   AWG_VERSION   go module version to fetch (default: v3.1.20260814)
+#   AWG_VERSION   go module version to fetch (default: version.txt in repo root)
 #   TARGETS       space-separated subset of "aarch64 mipsel mips" (default: all)
 #   NO_PATCH=1    skip applying tun-no-vnet-hdr.patch
 set -euo pipefail
 
-AWG_VERSION="${AWG_VERSION:-v3.1.20260814}"
 MODULE="github.com/amnezia-vpn/amneziawg-go/v3"
 TARGETS="${TARGETS:-aarch64 mipsel mips}"
 
@@ -18,6 +17,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PATCH_FILE="$SCRIPT_DIR/tun-no-vnet-hdr.patch"
 DIST_DIR="$REPO_ROOT/dist"
+
+if [ -z "${AWG_VERSION:-}" ]; then
+	AWG_VERSION="$(tr -d '[:space:]' <"$REPO_ROOT/version.txt")"
+fi
+[ -n "$AWG_VERSION" ] || {
+	echo "AWG_VERSION is empty (set env or version.txt)" >&2
+	exit 1
+}
 
 # suffix -> "GOOS GOARCH GOMIPS" (GOMIPS empty where not applicable)
 target_env() {
