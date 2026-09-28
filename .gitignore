@@ -6,3 +6,4 @@
 *.log
 *.hui
 .vscode
+dist/

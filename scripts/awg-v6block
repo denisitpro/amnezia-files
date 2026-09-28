@@ -1,0 +1,10 @@
+#!/bin/sh
+# Reject (not silently drop) IPv6 for every ndm policy whose IPv4 default is an opkgtunN,
+# so clients get an instant ICMPv6 unreachable and fall back to IPv4 through the tunnel.
+PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
+DEV_RE="opkgtun[0-9]*"
+for t in $(ip rule | grep fwmark | grep -o 'lookup [0-9]*' | awk '{print $2}' | sort -u); do
+    ip route show table $t | grep -q "^default dev $DEV_RE " || continue
+    ip -6 route show table $t | grep -q '^unreachable default' ||
+        ip -6 route add unreachable default metric 1 table $t
+done
