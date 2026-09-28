@@ -23,9 +23,10 @@ Verify with `sha256sum -c SHA256SUMS`.
 
 ## The patch
 
-Keenetic's 4.9-ndm kernel doesn't support `IFF_VNET_HDR` on its `tun` driver,
-so upstream's TUN-up detection hack fails to bring the interface up;
-`keenetic/tun-no-vnet-hdr.patch` drops that flag in `tun/tun_linux.go`.
+`keenetic/tun-no-vnet-hdr.patch` drops `IFF_VNET_HDR` from the TUN open in
+`tun/tun_linux.go` (one line), for Keenetic's old 4.9-ndm kernel. This is the
+build that runs in production on a Netcraze NC-1812. An unpatched build also
+starts there, but was not compared against the patched one over time.
 
 ## Building locally
 
