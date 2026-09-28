@@ -1,0 +1,116 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      awg_version:
+        description: amneziawg-go module version to build
+        required: false
+        type: string
+        default: v3.1.20260814
+      publish:
+        description: Create/update the GitHub release with the built assets
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Lint scripts
+        run: |
+          set -euo pipefail
+          bash -n keenetic/build.sh
+          sh -n scripts/S99awg
+          sh -n scripts/awg-v6block
+          sh -n scripts/50-awg-v6.sh
+          python3 -m py_compile scripts/conf2uapi.py
+
+      - name: Resolve AWG_VERSION
+        id: version
+        run: echo "value=${{ inputs.awg_version || 'v3.1.20260814' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build amneziawg-go
+        env:
+          AWG_VERSION: ${{ steps.version.outputs.value }}
+        run: keenetic/build.sh
+
+      - name: Stage release assets
+        env:
+          AWG_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp "dist/amneziawg-go-${AWG_VERSION}-aarch64" release/amneziawg-go-linux-aarch64
+          cp "dist/amneziawg-go-${AWG_VERSION}-mipsel" release/amneziawg-go-linux-mipsel
+          cp "dist/amneziawg-go-${AWG_VERSION}-mips" release/amneziawg-go-linux-mips
+          cp scripts/conf2uapi.py scripts/S99awg scripts/awg-v6block scripts/50-awg-v6.sh release/
+          cp keenetic/tun-no-vnet-hdr.patch release/
+
+          license_path="$(go env GOMODCACHE)/github.com/amnezia-vpn/amneziawg-go/v3@${AWG_VERSION}/LICENSE"
+          if [ ! -f "$license_path" ]; then
+            echo "::error::upstream LICENSE not found at $license_path" >&2
+            exit 1
+          fi
+          cp "$license_path" release/LICENSE-amneziawg-go
+
+          ( cd release && sha256sum -- * > SHA256SUMS )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release/
+
+  publish:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AWG_VERSION: ${{ inputs.awg_version }}
+        run: |
+          set -euo pipefail
+          tag="keenetic-${AWG_VERSION}"
+          go_version="$(go version)"
+          notes="Upstream amneziawg-go: ${AWG_VERSION}
+          Patch applied: drops IFF_VNET_HDR from tun/tun_linux.go (see keenetic/tun-no-vnet-hdr.patch)
+          Targets: linux/arm64 (aarch64), linux/mipsle (mipsel), linux/mips (mips), CGO_ENABLED=0, GOMIPS=softfloat where applicable
+          Go: ${go_version}
+          Commit: ${GITHUB_SHA}"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release/* --clobber
+          else
+            gh release create "$tag" release/* \
+              --title "amneziawg-go ${AWG_VERSION} for Keenetic" \
+              --notes "$notes"
+          fi
+          gh release edit "$tag" --latest

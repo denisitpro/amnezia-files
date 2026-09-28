@@ -1,0 +1,107 @@
+#!/bin/sh
+# Entware init script for amneziawg-go on Keenetic (ndm OpkgTun<N> interface).
+# Generalized from a script proven working on-router for a single "fi"
+# tunnel; several tunnels can share one binary, each with its own NAME/N.
+#
+# Config: edit the defaults below (rc.unslung passes no env at boot):
+#   NAME=awg   tunnel name: selects DEV/NDM_IF/UAPI/LOG/PID paths below
+#   N=0        OpkgTun index -> DEV=opkgtun$N, NDM_IF=OpkgTun$N
+#   BIN=/opt/sbin/amneziawg-go
+NAME=${NAME:-awg}
+N=${N:-0}
+DEV=opkgtun$N
+NDM_IF=OpkgTun$N
+BIN=${BIN:-/opt/sbin/amneziawg-go}
+UAPI=/opt/etc/amneziawg/$NAME.uapi
+SOCK=/var/run/amneziawg/$DEV.sock
+LOG=/opt/var/log/amneziawg-$NAME.log
+PIDFILE=/var/run/amneziawg-$NAME.pid
+PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# is_running PID: true if PID is set and alive.
+is_running() {
+    [ -n "$1" ] && kill -0 "$1" 2>/dev/null
+}
+
+# read_pid: echo the recorded PID, if any.
+read_pid() {
+    [ -f "$PIDFILE" ] && cat "$PIDFILE"
+}
+
+start() {
+    pid=$(read_pid)
+    if is_running "$pid"; then
+        echo "already running (pid $pid)"
+        return 0
+    fi
+    rm -f "$PIDFILE"
+
+    mkdir -p /opt/var/log
+    # ndm may not be ready yet at boot
+    i=0
+    until ndmc -c "show version" >/dev/null 2>&1 || [ $i -ge 60 ]; do
+        sleep 2
+        i=$((i + 1))
+    done
+
+    LOG_LEVEL=error $BIN -f $DEV </dev/null >$LOG 2>&1 &
+    pid=$!
+    echo "$pid" >"$PIDFILE"
+
+    i=0
+    until [ -S $SOCK ] || [ $i -ge 30 ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+    if [ ! -S $SOCK ]; then
+        echo "no socket"
+        return 1
+    fi
+
+    reply=$(socat - UNIX-CONNECT:$SOCK <$UAPI 2>&1)
+    echo "$reply" >>$LOG
+    case "$reply" in
+        *errno=0*) ;;
+        *)
+            echo "uapi config failed:"
+            echo "$reply"
+            return 1
+            ;;
+    esac
+
+    ndmc -c "interface $NDM_IF down" >/dev/null
+    ndmc -c "interface $NDM_IF up" >/dev/null
+    # optional: reject IPv6 for tunnel policies (keenetic/awg-v6block)
+    [ -x /opt/sbin/awg-v6block ] && /opt/sbin/awg-v6block
+    echo "started (pid $pid)"
+}
+
+stop() {
+    pid=$(read_pid)
+    if is_running "$pid"; then
+        kill "$pid" 2>/dev/null
+    fi
+    rm -f "$PIDFILE"
+    echo "stopped"
+}
+
+status() {
+    pid=$(read_pid)
+    if is_running "$pid" && ip link show $DEV >/dev/null 2>&1; then
+        echo "running (pid $pid)"
+    else
+        echo "stopped"
+    fi
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart)
+        stop
+        sleep 2
+        start
+        ;;
+    status) status ;;
+    *) echo "usage: $0 {start|stop|restart|status}" ;;
+esac
